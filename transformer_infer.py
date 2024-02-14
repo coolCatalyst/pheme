@@ -256,7 +256,10 @@ if __name__ == "__main__":
 
     client = PhemeClient(args)
     audio_array = client.infer(args.text, voice=args.voice)
+    audio_array = client.infer(args.text, voice=args.voice)
     sf.write(os.path.join(
         args.outputdir, f"{args.voice}.wav"), audio_array, 
         args.target_sample_rate
     )
+    audio_path = os.path.join(args.outputdir, f"{args.voice}.wav")
+    print(f"audio is writen to {audio_path}")
