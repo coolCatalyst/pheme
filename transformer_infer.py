@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from pyannote.audio import Inference
 from transformers import GenerationConfig, T5ForConditionalGeneration
 
 import constants as c
+from SemanticStream import SemanticStreamer
 from data.collation import get_text_semantic_token_collater
 from data.semantic_dataset import TextTokenizer
 from modules.s2a_model import Pheme
@@ -34,7 +36,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--text", type=str,
-        default="I gotta say, I would never expect that to happen!"
+        default="Your initial investment covers franchise fees, equipment, initial stock, and training. After that, there's a revenue split; we take 8% for ongoing support and advertising. How's that sound?"
     )
     parser.add_argument(
         "--manifest_path", type=str, default="demo/manifest.json")
@@ -53,6 +55,7 @@ def parse_arguments():
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_k", type=int, default=210)
     parser.add_argument("--voice", type=str, default="male_voice")
+    parser.add_argument("--chunk_size", type=int, default=50)
 
     return parser.parse_args()
 
@@ -65,7 +68,7 @@ class PhemeClient():
         self.featuredir = Path(args.featuredir).expanduser()
         self.collater = get_text_semantic_token_collater(args.text_tokens_file)
         self.phonemizer = TextTokenizer()
-    
+        self.chunk_size = args.chunk_size
         self.load_manifest(args.manifest_path)
 
         # T2S model
@@ -112,23 +115,29 @@ class PhemeClient():
         labels = [str(lbl) for lbl in semantic_prompt]
         labels = self.collater([labels])[:, :-1]
         decoder_input_ids = labels.to(device).long()
-        logging.debug(f"decoder_input_ids: {decoder_input_ids}")
+        # logging.debug(f"decoder_input_ids: {decoder_input_ids}")
 
         counts = 1E10
-        while (counts > MAX_TOKEN_COUNT):
-            output_ids = self.t2s.generate(
+        streamer = SemanticStreamer(self.chunk_size)
+
+        # while (counts > MAX_TOKEN_COUNT):
+        def process():
+            self.t2s.generate(
                 input_ids, decoder_input_ids=decoder_input_ids,
-                generation_config=sampling_config).sequences
-            
-            # check repetitiveness
-            _, counts = torch.unique_consecutive(output_ids, return_counts=True)
-            counts = max(counts).item()
+                generation_config=sampling_config, streamer=streamer
+            ).sequences
 
-        output_semantic = self.lazy_decode(
-            output_ids[0], self.collater.idx2token)
-
+        threading.Thread(target=process).start()
+        for i, chunk in enumerate(streamer):
+            if i == 0:
+                ids = torch.concatenate([chunk[0][0, len(semantic_prompt):]] + chunk[1:])
+            else:
+                ids = torch.concatenate(chunk)
+            semantic = self.lazy_decode(ids, self.collater.idx2token)
+            yield semantic.reshape(1, -1)
         # remove the prompt
-        return output_semantic[len(semantic_prompt):].reshape(1, -1)
+        # return output_semantic[:].reshape(1, -1), output_semantic_xx[len(semantic_prompt):].reshape(1, -1)
+        # return (output_semantic[len(semantic_prompt):].reshape(1, -1),)
 
     def _load_speaker_emb(self, element_id_prompt):
         wav, _ = sf.read(self.featuredir / element_id_prompt)
@@ -205,21 +214,22 @@ class PhemeClient():
 
     def generate_audio(self, text, voice, sampling_config, prompt_file_path):
         start_time = time.time()
-        output_semantic = self.infer_text(
+        output_semantices = self.infer_text(
             text, voice, sampling_config
         )
-        logging.debug(f"semantic_tokens: {time.time() - start_time}")
 
-        start_time = time.time()
-        codes = self.infer_acoustic(output_semantic, prompt_file_path)
-        logging.debug(f"acoustic_tokens: {time.time() - start_time}")
+        for output_semantic in output_semantices:
+            logging.debug(f"semantic_tokens: {time.time() - start_time}")
+            start_time = time.time()
+            codes = self.infer_acoustic(output_semantic, prompt_file_path)
+            logging.debug(f"acoustic_tokens: {time.time() - start_time}")
 
-        start_time = time.time()
-        audio_array = self.vocoder.decode(codes)
-        audio_array = rearrange(audio_array, "1 1 T -> T").cpu().numpy()
-        logging.debug(f"vocoder time: {time.time() - start_time}")
-
-        return audio_array
+            start_time = time.time()
+            audio_array = self.vocoder.decode(codes)
+            audio_array = rearrange(audio_array, "1 1 T -> T").cpu().numpy()
+            logging.debug(f"vocoder time: {time.time() - start_time}")
+            start_time = time.time()
+            yield audio_array
 
     @torch.no_grad()
     def infer(
@@ -255,11 +265,22 @@ if __name__ == "__main__":
     args.manifest_path = Path(args.manifest_path).expanduser()
 
     client = PhemeClient(args)
-    audio_array = client.infer(args.text, voice=args.voice)
-    audio_array = client.infer(args.text, voice=args.voice)
-    sf.write(os.path.join(
-        args.outputdir, f"{args.voice}.wav"), audio_array, 
-        args.target_sample_rate
-    )
+    audio_arrays = client.infer(args.text, voice=args.voice)
+
+    for i, audio_array in enumerate(audio_arrays):
+        pass
+    print("######################################################################################################")
+    audio_arrays = client.infer(
+        "Fantastic. I'm glad you see the value. We want you to succeed, that's how we succeed. Do you have any other questions?",
+        voice=args.voice)
+    start = time.time()
+    for i, audio_array in enumerate(audio_arrays):
+        sf.write(
+            os.path.join(args.outputdir, f"{args.voice}_{i}.wav"),
+            audio_array,
+            args.target_sample_rate
+        )
+        print("Generation Time", time.time() - start)
+        start = time.time()
     audio_path = os.path.join(args.outputdir, f"{args.voice}.wav")
     print(f"audio is writen to {audio_path}")

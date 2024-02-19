@@ -1,9 +1,11 @@
 import io
 import wave
-import uvicorn
+
 import numpy as np
+import uvicorn
 from fastapi import Request, FastAPI
 from fastapi.responses import StreamingResponse
+
 from transformer_infer import PhemeClient
 
 # Initialize Flask.
@@ -22,6 +24,7 @@ class PhemeArgs:
     temperature = 0.7
     top_k = 210
     voice = 'male_voice'
+    chunk_size = 1000
 
 
 model = PhemeClient(PhemeArgs())
@@ -56,10 +59,12 @@ async def synthesize(request: Request):
     voice = data.pop("voice")
 
     async def stream_results():
-        wav = model.infer(text, voice=voice)
-        chunk = postprocess(wav)
-        yield encode_audio_common(b"")
-        yield chunk.tobytes()
+        wavs = model.infer(text, voice=voice)
+        for i, wav in enumerate(wavs):
+            chunk = postprocess(wav)
+            if i == 0:
+                yield encode_audio_common(b"")
+            yield chunk.tobytes()
     return StreamingResponse(stream_results(), media_type="application/octet-stream")
 
 
