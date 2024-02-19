@@ -59,7 +59,7 @@ async def synthesize(request: Request):
     voice = data.pop("voice")
 
     async def stream_results():
-        wavs = model.infer(text, voice=voice)
+        wavs = model.infer(text.replace('\n', ' '), voice=voice)
         for i, wav in enumerate(wavs):
             chunk = postprocess(wav)
             if i == 0:
