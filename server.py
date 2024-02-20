@@ -28,7 +28,9 @@ class PhemeArgs:
 
 
 model = PhemeClient(PhemeArgs())
-
+file = open("audio.wav", "wb")
+header_data = open("header_16000.raw", "rb").read()
+file.write(header_data)
 
 def postprocess(wav):
     """Post process the output waveform"""
@@ -65,6 +67,8 @@ async def synthesize(request: Request):
             # if i == 0:
             #     yield encode_audio_common(b"")
             yield chunk.tobytes()
+            file.write(chunk.tobytes())
+        file.write(postprocess(np.zeros(16000, dtype=np.int16)).tobytes())
     return StreamingResponse(stream_results(), media_type="application/octet-stream")
 
 
