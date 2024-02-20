@@ -24,7 +24,7 @@ class PhemeArgs:
     temperature = 0.7
     top_k = 210
     voice = 'male_voice'
-    chunk_size = 1000
+    chunk_size = 100
 
 
 model = PhemeClient(PhemeArgs())
@@ -62,8 +62,8 @@ async def synthesize(request: Request):
         wavs = model.infer(text.replace('\n', ' '), voice=voice)
         for i, wav in enumerate(wavs):
             chunk = postprocess(wav)
-            if i == 0:
-                yield encode_audio_common(b"")
+            # if i == 0:
+            #     yield encode_audio_common(b"")
             yield chunk.tobytes()
     return StreamingResponse(stream_results(), media_type="application/octet-stream")
 

@@ -54,7 +54,7 @@ def parse_arguments():
 
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_k", type=int, default=210)
-    parser.add_argument("--voice", type=str, default="male_voice")
+    parser.add_argument("--voice", type=str, default="POD0000015908_S0000037")
     parser.add_argument("--chunk_size", type=int, default=50)
 
     return parser.parse_args()
@@ -217,11 +217,14 @@ class PhemeClient():
         output_semantices = self.infer_text(
             text, voice, sampling_config
         )
-
+        audio_length = 0
+        semantic_array = []
         for output_semantic in output_semantices:
+            semantic_array.append(output_semantic)
+            out_semantic = np.concatenate(semantic_array, axis=1)
             logging.debug(f"semantic_tokens: {time.time() - start_time}")
             start_time = time.time()
-            codes = self.infer_acoustic(output_semantic, prompt_file_path)
+            codes = self.infer_acoustic(out_semantic, prompt_file_path)
             logging.debug(f"acoustic_tokens: {time.time() - start_time}")
 
             start_time = time.time()
@@ -229,7 +232,8 @@ class PhemeClient():
             audio_array = rearrange(audio_array, "1 1 T -> T").cpu().numpy()
             logging.debug(f"vocoder time: {time.time() - start_time}")
             start_time = time.time()
-            yield audio_array
+            yield audio_array[audio_length:]
+            audio_length = len(audio_array)
 
     @torch.no_grad()
     def infer(
